@@ -1,7 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:developer';
 
-import 'package:meta/meta.dart';
+import 'package:flutter/foundation.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:youtube_player_iframe/youtube_player_iframe.dart';
 
@@ -9,40 +10,41 @@ import 'package:youtube_player_iframe/youtube_player_iframe.dart';
 class YoutubePlayerEventHandler {
   /// Creates [YoutubePlayerEventHandler] with the provided [controller].
   YoutubePlayerEventHandler(this.controller) {
-    final _events = <String, void Function(Object)>{
+    _events = {
       'Ready': onReady,
       'StateChange': onStateChange,
       'PlaybackQualityChange': onPlaybackQualityChange,
       'PlaybackRateChange': onPlaybackRateChange,
       'PlayerError': onError,
       'FullscreenButtonPressed': onFullscreenButtonPressed,
-    };
-
-    javascriptChannels = {
-      JavascriptChannel(
-        name: 'YoutubePlayer',
-        onMessageReceived: (channel) {
-          final data = Map.from(jsonDecode(channel.message));
-
-          for (final entry in data.entries) {
-            if (entry.key == 'ApiChange') {
-              onApiChange(entry.value);
-            } else {
-              _events[entry.key]?.call(entry.value);
-            }
-          }
-        },
-      ),
+      'VideoState': onVideoState,
+      'AutoplayBlocked': onAutoplayBlocked,
     };
   }
 
   /// The [YoutubePlayerController].
   final YoutubePlayerController controller;
 
-  /// The [JavascriptChannels] to be used by the player iframe.
-  late final Set<JavascriptChannel> javascriptChannels;
+  /// The [YoutubeVideoState] stream controller.
+  final StreamController<YoutubeVideoState> videoStateController =
+      StreamController.broadcast();
 
-  Completer<void> _readyCompleter = Completer();
+  final Completer<void> _readyCompleter = Completer();
+  late final Map<String, ValueChanged<Object>> _events;
+
+  /// Handles the [javaScriptMessage] from the player iframe and create events.
+  void call(JavaScriptMessage javaScriptMessage) {
+    final data = Map.from(jsonDecode(javaScriptMessage.message));
+    if (data['playerId'] != controller.playerId) return;
+
+    for (final entry in data.entries) {
+      if (entry.key == 'ApiChange') {
+        onApiChange(entry.value);
+      } else {
+        _events[entry.key]?.call(entry.value ?? Object());
+      }
+    }
+  }
 
   /// This event fires whenever a player has finished loading and is ready to begin receiving API calls.
   /// Your application should implement this function if you want to automatically execute certain operations,
@@ -124,10 +126,22 @@ class YoutubePlayerEventHandler {
     controller.update(error: error);
   }
 
+  /// This event fires when the player receives information about video states.
+  void onVideoState(Object data) {
+    if (videoStateController.isClosed) return;
+
+    videoStateController.add(YoutubeVideoState.fromJson(data.toString()));
+  }
+
+  /// This event fires when the auto playback is blocked by the browser.
+  void onAutoplayBlocked(Object data) {
+    log(
+      'Autoplay was blocked by browser. '
+      'Most modern browser does not allow video with sound to autoplay. '
+      'Try muting the video to autoplay.',
+    );
+  }
+
   /// Returns a [Future] that completes when the player is ready.
   Future<void> get isReady => _readyCompleter.future;
-
-  /// Resets the [isReady] future.
-  @internal
-  void reset() => _readyCompleter = Completer();
 }
